@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Классификатор текста</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 Классификатор текста</h1>
+            <p class="subtitle">Определите тональность или категорию вашего текста</p>
+        </header>
+
+        <div class="main-card">
+            <div class="input-section">
+                <textarea 
+                    id="text-input" 
+                    placeholder="Введите текст для классификации..." 
+                    rows="6"
+                >{{ text if text else '' }}</textarea>
+                
+                <div class="button-group">
+                    <button id="classify-btn" class="btn btn-primary">
+                        <span>🔍</span> Классифицировать
+                    </button>
+                    <button id="clear-btn" class="btn btn-secondary">
+                        <span>🗑️</span> Очистить
+                    </button>
+                </div>
+            </div>
+
+            <div id="result-section" class="result-section" style="display: none;">
+                <div class="result-header">
+                    <h2>Результат классификации</h2>
+                    <button id="save-btn" class="btn btn-success">
+                        <span>💾</span> Сохранить
+                    </button>
+                </div>
+                <div id="result-content" class="result-content">
+                    <!-- Результаты будут вставлены сюда -->
+                </div>
+            </div>
+
+            <div id="error-section" class="error-section" style="display: none;">
+                <div class="error-message">
+                    <span>❌</span>
+                    <span id="error-text">Ошибка</span>
+                </div>
+            </div>
+
+            <div id="loading" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>Анализ текста...</p>
+            </div>
+        </div>
+
+        <div class="history-section">
+            <h2>📚 История сохраненных результатов</h2>
+            <div id="history-content">
+                <p class="empty-history">Нет сохраненных результатов</p>
+            </div>
+        </div>
+
+        <footer>
+            <p>Используется модель: <span id="model-name">distilbert-base-uncased-finetuned-sst-2-english</span></p>
+        </footer>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const textInput = document.getElementById('text-input');
+            const classifyBtn = document.getElementById('classify-btn');
+            const clearBtn = document.getElementById('clear-btn');
+            const saveBtn = document.getElementById('save-btn');
+            const resultSection = document.getElementById('result-section');
+            const resultContent = document.getElementById('result-content');
+            const errorSection = document.getElementById('error-section');
+            const errorText = document.getElementById('error-text');
+            const loading = document.getElementById('loading');
+            const historyContent = document.getElementById('history-content');
+
+            // Загрузка истории
+            loadHistory();
+
+            // Обработка классификации
+            classifyBtn.addEventListener('click', async function() {
+                const text = textInput.value.trim();
+                if (!text) {
+                    showError('Пожалуйста, введите текст для классификации');
+                    return;
+                }
+
+                // Скрываем предыдущие результаты и ошибки
+                resultSection.style.display = 'none';
+                errorSection.style.display = 'none';
+                loading.style.display = 'block';
+
+                try {
+                    const response = await fetch('/classify', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ text: text })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        displayResults(data.result);
+                        // Сохраняем текст в сессии для кнопки сохранения
+                        window.lastClassifiedText = text;
+                        window.lastClassifiedResult = data.result;
+                    } else {
+                        showError(data.error || 'Ошибка классификации');
+                    }
+                } catch (error) {
+                    showError('Ошибка соединения с сервером');
+                    console.error('Error:', error);
+                } finally {
+                    loading.style.display = 'none';
+                }
+            });
+
+            // Очистка
+            clearBtn.addEventListener('click', function() {
+                textInput.value = '';
+                resultSection.style.display = 'none';
+                errorSection.style.display = 'none';
+                loading.style.display = 'none';
+                window.lastClassifiedText = null;
+                window.lastClassifiedResult = null;
+            });
+
+            // Сохранение результата
+            saveBtn.addEventListener('click', async function() {
+                if (!window.lastClassifiedText || !window.lastClassifiedResult) {
+                    showError('Нет результата для сохранения');
+                    return;
+                }
+
+                try {
+                    const response = await fetch('/save', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            text: window.lastClassifiedText,
+                            result: window.lastClassifiedResult
+                        })
+                    });
+
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        showSuccess('Результат сохранен!');
+                        loadHistory();
+                    } else {
+                        showError(data.error || 'Ошибка сохранения');
+                    }
+                } catch (error) {
+                    showError('Ошибка сохранения');
+                    console.error('Error:', error);
+                }
+            });
+
+            // Отображение результатов
+            function displayResults(results) {
+                resultSection.style.display = 'block';
+                resultContent.innerHTML = '';
+                
+                if (!results || results.length === 0) {
+                    resultContent.innerHTML = '<p>Нет результатов</p>';
+                    return;
+                }
+
+                const list = document.createElement('div');
+                list.className = 'result-list';
+
+                results.forEach(item => {
+                    const resultItem = document.createElement('div');
+                    resultItem.className = 'result-item';
+                    
+                    const label = item.label;
+                    const score = item.score;
+                    
+                    // Определяем цвет в зависимости от тональности
+                    let color = '#6c757d';
+                    let emoji = '😐';
+                    if (label.toLowerCase().includes('positive') || label.toLowerCase().includes('pos')) {
+                        color = '#28a745';
+                        emoji = '😊';
+                    } else if (label.toLowerCase().includes('negative') || label.toLowerCase().includes('neg')) {
+                        color = '#dc3545';
+                        emoji = '😔';
+                    } else if (label.toLowerCase().includes('neutral')) {
+                        color = '#ffc107';
+                        emoji = '😐';
+                    }
+
+                    const percentage = (score * 100).toFixed(1);
+                    
+                    resultItem.innerHTML = `
+                        <div class="result-label">
+                            <span class="result-emoji">${emoji}</span>
+                            <span class="result-label-text">${label}</span>
+                        </div>
+                        <div class="result-bar-container">
+                            <div class="result-bar" style="width: ${percentage}%; background-color: ${color};"></div>
+                            <span class="result-percentage">${percentage}%</span>
+                        </div>
+                    `;
+                    
+                    list.appendChild(resultItem);
+                });
+
+                resultContent.appendChild(list);
+                
+                // Показываем кнопку сохранения
+                saveBtn.style.display = 'inline-block';
+            }
+
+            // Отображение ошибок
+            function showError(message) {
+                errorSection.style.display = 'block';
+                errorText.textContent = message;
+                resultSection.style.display = 'none';
+                loading.style.display = 'none';
+            }
+
+            function showSuccess(message) {
+                // Создаем временное уведомление
+                const notification = document.createElement('div');
+                notification.className = 'notification success';
+                notification.innerHTML = `✅ ${message}`;
+                document.querySelector('.container').insertBefore(notification, document.querySelector('.main-card'));
+                
+                setTimeout(() => {
+                    notification.remove();
+                }, 3000);
+            }
+
+            // Загрузка истории
+            async function loadHistory() {
+                try {
+                    const response = await fetch('/history');
+                    const data = await response.json();
+                    
+                    if (data.history && data.history.length > 0) {
+                        historyContent.innerHTML = '';
+                        data.history.forEach(record => {
+                            const item = document.createElement('div');
+                            item.className = 'history-item';
+                            
+                            const date = new Date(record.timestamp);
+                            const dateStr = date.toLocaleDateString('ru-RU');
+                            const timeStr = date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+                            
+                            const resultText = record.result.map(r => 
+                                `${r.label} (${(r.score * 100).toFixed(1)}%)`
+                            ).join(', ');
+                            
+                            item.innerHTML = `
+                                <div class="history-text">${record.text.substring(0, 100)}${record.text.length > 100 ? '...' : ''}</div>
+                                <div class="history-result">${resultText}</div>
+                                <div class="history-date">${dateStr} ${timeStr}</div>
+                            `;
+                            
+                            historyContent.appendChild(item);
+                        });
+                    } else {
+                        historyContent.innerHTML = '<p class="empty-history">Нет сохраненных результатов</p>';
+                    }
+                } catch (error) {
+                    console.error('Error loading history:', error);
+                }
+            }
+
+            // Автоматическая классификация при вводе (опционально)
+            let typingTimer;
+            textInput.addEventListener('input', function() {
+                clearTimeout(typingTimer);
+                if (this.value.length > 20) {
+                    typingTimer = setTimeout(() => {
+                        classifyBtn.click();
+                    }, 2000);
+                }
+            });
+        });
+    </script>
+</body>
+</html>
